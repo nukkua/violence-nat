@@ -38,21 +38,6 @@ fun SetupScreen(navController: NavController? = null, appViewModel: AppViewModel
                                     else "Agrega contactos para alertas automáticas",
                             route = "contacts_setup"
                     ),
-                    SetupOption(
-                            emoji = "🤖",
-                            title = "Bot de Telegram",
-                            description =
-                                    if (configState?.isTelegramConfigured == true)
-                                            "Configurado correctamente"
-                                    else "Configura tu bot para recibir alertas",
-                            route = "telegram_setup"
-                    ),
-                    SetupOption(
-                            emoji = "🔊",
-                            title = "Configuración de Audio",
-                            description = "Ajusta sensibilidad y calidad de grabación",
-                            route = "audio_setup"
-                    )
             )
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {

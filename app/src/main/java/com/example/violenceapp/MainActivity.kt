@@ -16,6 +16,7 @@ import com.example.violenceapp.data.SharedPreferencesManager
 import com.example.violenceapp.ui.navigation.ViolenceAppNavigation
 import com.example.violenceapp.ui.screens.AuthScreen
 import com.example.violenceapp.ui.theme.ViolenceAppTheme
+import com.example.violenceapp.utils.PermissionHandler
 import com.example.violenceapp.viewmodel.AppViewModel
 import com.example.violenceapp.viewmodel.AppViewModelFactory
 
@@ -23,13 +24,18 @@ class MainActivity : FragmentActivity() {
 
     private lateinit var biometricAuthManager: BiometricAuthManager
     private lateinit var sharedPreferencesManager: SharedPreferencesManager
+    private lateinit var permissionHandler: PermissionHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Inicializar managers
-        biometricAuthManager = BiometricAuthManager(this)
-        sharedPreferencesManager = SharedPreferencesManager(this)
+        // biometricAuthManager = BiometricAuthManager(this)
+        // sharedPreferencesManager = SharedPreferencesManager(this)
+        permissionHandler = PermissionHandler(this) // <- Corregido (mayúscula)
+
+        permissionHandler.checkPermissions()
+        // Verificar permisos al inicio
 
         setContent {
             ViolenceAppTheme {
@@ -47,7 +53,9 @@ class MainActivity : FragmentActivity() {
 
         // Crear ViewModel con Factory
         val appViewModel: AppViewModel =
-                viewModel(factory = AppViewModelFactory(sharedPreferencesManager))
+                viewModel(
+                        factory = AppViewModelFactory(sharedPreferencesManager, this@MainActivity)
+                )
 
         if (isAuthenticated) {
             // Una vez autenticado, mostrar la navegación principal
