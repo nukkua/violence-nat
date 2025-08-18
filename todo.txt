@@ -1,0 +1,24 @@
+Sistema de login con huella/face[X]
+Proteger la app con biometría[X]
+Solo permitir acceso autorizado[X]
+
+
+Detectar cuando el usuario dice la palabra clave
+Mostrar texto reconocido en tiempo real
+Base para el sistema de alertas
+
+
+Pantalla para configurar bot token y chat ID
+Validación de conexión
+Envío de mensajes de prueba
+
+
+Capturar 30 segundos de audio después del keyword
+Guardar archivos temporalmente
+Preparar para envío al backend
+
+
+Conectar con API de análisis
+Procesar respuesta de riesgo
+Mostrar resultados del análisis
+
