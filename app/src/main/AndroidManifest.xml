@@ -47,7 +47,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".services.VoiceRecognitionService"
+            android:name=".VoiceRecognitionService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" 

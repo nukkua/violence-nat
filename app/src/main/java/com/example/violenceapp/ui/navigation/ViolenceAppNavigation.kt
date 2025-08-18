@@ -63,6 +63,7 @@ fun ViolenceAppNavigation(viewModel: AppViewModel) {
             }
         }
 
+        // Navbar flotante (solo mostrar en ciertas pantallas)
         if (showNavbar) {
             FloatingBottomNavBar(
                     navController = navController,
