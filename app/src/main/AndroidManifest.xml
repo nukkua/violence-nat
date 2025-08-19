@@ -47,11 +47,10 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".VoiceRecognitionService"
+            android:name="com.example.violenceapp.services.VoiceRecognitionService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="microphone" 
-        />
+            android:foregroundServiceType="microphone" />
     </application>
 
 </manifest>

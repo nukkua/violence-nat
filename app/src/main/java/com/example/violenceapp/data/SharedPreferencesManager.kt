@@ -3,18 +3,22 @@ package com.example.violenceapp.data
 import android.content.Context
 import android.content.SharedPreferences
 
-class SharedPreferencesManager(context: Context) {
-
+class SharedPreferencesManager(val context: Context) {
     companion object {
         private const val PREF_NAME = "ViolenceAppPrefs"
-
         private const val KEY_KEYWORD = "keyword"
         private const val KEY_IS_KEYWORD_CONFIGURED = "is_keyword_configured"
-        private const val KEY_TELEGRAM_TOKEN = "8397338322:AAGlGZM3p2ZPVjrT68l5RTD8KZvk9vEjS3o"
-        private const val KEY_TELEGRAM_CHAT_ID = "1390994727"
-        private const val KEY_IS_TELEGRAM_CONFIGURED = "is_telegram_configured"
+
+        // Cambiar de Telegram a WhatsApp
+        private const val KEY_WHATSAPP_NUMBER = "whatsapp_number"
+        private const val KEY_WHATSAPP_MESSAGE = "whatsapp_message"
+        private const val KEY_IS_WHATSAPP_CONFIGURED = "is_whatsapp_configured"
+
         private const val KEY_EMERGENCY_CONTACTS_COUNT = "emergency_contacts_count"
         private const val KEY_FIRST_TIME_SETUP = "first_time_setup"
+
+        // Lista de contactos de emergencia (números de WhatsApp)
+        private const val KEY_EMERGENCY_CONTACTS = "emergency_contacts"
     }
 
     private val sharedPreferences: SharedPreferences =
@@ -46,32 +50,72 @@ class SharedPreferencesManager(context: Context) {
                 .apply()
     }
 
-    // Configuración de Telegram
-    fun saveTelegramConfig(botToken: String, chatId: String) {
+    // Configuración de WhatsApp (reemplaza Telegram)
+    fun saveWhatsAppConfig(phoneNumber: String, emergencyMessage: String) {
         sharedPreferences
                 .edit()
-                .putString(KEY_TELEGRAM_TOKEN, botToken)
-                .putString(KEY_TELEGRAM_CHAT_ID, chatId)
+                .putString(KEY_WHATSAPP_NUMBER, phoneNumber)
+                .putString(KEY_WHATSAPP_MESSAGE, emergencyMessage)
                 .putBoolean(
-                        KEY_IS_TELEGRAM_CONFIGURED,
-                        botToken.isNotEmpty() && chatId.isNotEmpty()
+                        KEY_IS_WHATSAPP_CONFIGURED,
+                        phoneNumber.isNotEmpty() && emergencyMessage.isNotEmpty()
                 )
                 .apply()
     }
 
+    fun getWhatsAppNumber(): String {
+        return sharedPreferences.getString(KEY_WHATSAPP_NUMBER, "") ?: ""
+    }
+
+    fun getWhatsAppMessage(): String {
+        return sharedPreferences.getString(
+                KEY_WHATSAPP_MESSAGE,
+                "🚨 EMERGENCIA: Se ha detectado la palabra clave de alerta"
+        )
+                ?: ""
+    }
+
+    fun isWhatsAppConfigured(): Boolean {
+        return sharedPreferences.getBoolean(KEY_IS_WHATSAPP_CONFIGURED, false)
+    }
+
+    // Métodos de compatibilidad con tu AppViewModel existente (mantener nombres de Telegram)
+    fun saveTelegramConfig(botToken: String, chatId: String) {
+        // Mapear a WhatsApp para compatibilidad
+        saveWhatsAppConfig(chatId, botToken) // Usar chatId como número y token como mensaje
+    }
+
     fun getTelegramToken(): String {
-        return sharedPreferences.getString(KEY_TELEGRAM_TOKEN, "") ?: ""
+        return getWhatsAppMessage() // Mapear mensaje a token para compatibilidad
     }
 
     fun getTelegramChatId(): String {
-        return sharedPreferences.getString(KEY_TELEGRAM_CHAT_ID, "") ?: ""
+        return getWhatsAppNumber() // Mapear número a chatId para compatibilidad
     }
 
     fun isTelegramConfigured(): Boolean {
-        return sharedPreferences.getBoolean(KEY_IS_TELEGRAM_CONFIGURED, false)
+        return isWhatsAppConfigured() // Mapear para compatibilidad
     }
 
-    // Contactos de emergencia
+    // Contactos de emergencia (lista de números de WhatsApp)
+    fun saveEmergencyContacts(contacts: List<String>) {
+        val contactsString = contacts.joinToString(",")
+        sharedPreferences
+                .edit()
+                .putString(KEY_EMERGENCY_CONTACTS, contactsString)
+                .putInt(KEY_EMERGENCY_CONTACTS_COUNT, contacts.size)
+                .apply()
+    }
+
+    fun getEmergencyContacts(): List<String> {
+        val contactsString = sharedPreferences.getString(KEY_EMERGENCY_CONTACTS, "") ?: ""
+        return if (contactsString.isNotEmpty()) {
+            contactsString.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        } else {
+            emptyList()
+        }
+    }
+
     fun saveEmergencyContactsCount(count: Int) {
         sharedPreferences.edit().putInt(KEY_EMERGENCY_CONTACTS_COUNT, count).apply()
     }
@@ -103,12 +147,17 @@ class SharedPreferencesManager(context: Context) {
         return mapOf(
                 "keyword" to getKeyword(),
                 "isKeywordConfigured" to isKeywordConfigured(),
-                "telegramToken" to getTelegramToken(),
-                "telegramChatId" to getTelegramChatId(),
-                "isTelegramConfigured" to isTelegramConfigured(),
+                "whatsappNumber" to getWhatsAppNumber(),
+                "whatsappMessage" to getWhatsAppMessage(),
+                "isWhatsAppConfigured" to isWhatsAppConfigured(),
+                "emergencyContacts" to getEmergencyContacts(),
                 "emergencyContactsCount" to getEmergencyContactsCount(),
                 "hasEmergencyContacts" to hasEmergencyContacts(),
-                "isFirstTimeSetup" to isFirstTimeSetup()
+                "isFirstTimeSetup" to isFirstTimeSetup(),
+                // Mantener compatibilidad con nombres antiguos
+                "telegramToken" to getTelegramToken(),
+                "telegramChatId" to getTelegramChatId(),
+                "isTelegramConfigured" to isTelegramConfigured()
         )
     }
 }

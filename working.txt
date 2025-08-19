@@ -1,5 +1,738 @@
 package com.example.violenceapp
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.os.IBinder
+import android.os.PowerManager
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.example.violenceapp.services.AlertService
+import java.util.*
+
+class VoiceRecognitionService : Service() {
+
+    companion object {
+        private const val TAG = "VoiceRecognitionService"
+        private const val NOTIFICATION_ID = 1001
+        private const val CHANNEL_ID = "voice_recognition_channel"
+        private const val CHANNEL_NAME = "Reconocimiento de Voz + Telegram"
+    }
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isRunning = false
+    private var isListening = false
+    private var recognitionCount = 0
+    private var alertCount = 0
+
+    // Sistema de alertas por Telegram
+    private lateinit var alertService: AlertService
+
+    override fun onCreate() {
+        super.onCreate()
+        Log.d(TAG, "🎤 Servicio de reconocimiento de voz creado")
+        createNotificationChannel()
+        acquireWakeLock()
+        setupSpeechRecognizer()
+
+        // Inicializar sistema de alertas por Telegram
+        alertService = AlertService(this)
+        Log.d(TAG, "🚨 Sistema de alertas por Telegram inicializado")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            "START_RECOGNITION" -> startRecognition()
+            "STOP_RECOGNITION" -> stopRecognition()
+        }
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cleanup()
+    }
+
+    private fun startRecognition() {
+        if (!hasAudioPermission()) {
+            Log.e(TAG, "❌ Sin permisos de audio")
+            stopSelf()
+            return
+        }
+
+        isRunning = true
+        val notification = createNotification()
+        startForeground(NOTIFICATION_ID, notification)
+        startListening()
+
+        Log.i(TAG, "✅ Reconocimiento de voz iniciado - Sistema de alertas por Telegram activo")
+    }
+
+    private fun stopRecognition() {
+        isRunning = false
+        isListening = false
+        speechRecognizer?.stopListening()
+        stopForeground(true)
+        stopSelf()
+
+        Log.i(TAG, "⏹️ Reconocimiento de voz detenido - Sistema de alertas desactivado")
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = getSystemService(NotificationManager::class.java)
+
+            val existingChannel = notificationManager.getNotificationChannel(CHANNEL_ID)
+            if (existingChannel?.importance == NotificationManager.IMPORTANCE_NONE) {
+                notificationManager.deleteNotificationChannel(CHANNEL_ID)
+            }
+
+            val channel =
+                    NotificationChannel(
+                                    CHANNEL_ID,
+                                    CHANNEL_NAME,
+                                    NotificationManager.IMPORTANCE_DEFAULT
+                            )
+                            .apply {
+                                description = "Reconocimiento de voz con alertas automáticas por Telegram"
+                                setShowBadge(true)
+                                enableLights(false)
+                                enableVibration(false)
+                                setSound(null, null)
+                                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                            }
+
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createNotification(): Notification {
+        val stopIntent =
+                Intent(this, VoiceRecognitionService::class.java).apply {
+                    action = "STOP_RECOGNITION"
+                }
+        val stopPendingIntent =
+                PendingIntent.getService(
+                        this,
+                        0,
+                        stopIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+        val statusText = if (alertCount > 0) {
+            "🚨 Alertas enviadas: $alertCount"
+        } else {
+            "🎤 Escuchando... | 📱 Telegram listo"
+        }
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("🎤 Voz + 📱 Telegram")
+                .setContentText(statusText)
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .addAction(android.R.drawable.ic_media_pause, "Detener", stopPendingIntent)
+                .setStyle(
+                        NotificationCompat.BigTextStyle()
+                                .bigText(
+                                        "🎤 Reconocimiento de voz activo\n📱 Envío automático por Telegram\n🚨 Di 'alerta' para activar emergencia"
+                                )
+                )
+                .build()
+    }
+
+    private fun setupSpeechRecognizer() {
+        if (!hasAudioPermission()) return
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer?.setRecognitionListener(createRecognitionListener())
+    }
+
+    private fun createRecognitionListener() =
+            object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    isListening = true
+                    Log.d(TAG, "✅ Listo para escuchar - Sistema de alertas activo")
+                }
+
+                override fun onBeginningOfSpeech() {
+                    Log.d(TAG, "🎤 Comenzando a hablar...")
+                }
+
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+
+                override fun onEndOfSpeech() {
+                    Log.d(TAG, "🔇 Fin del habla")
+                }
+
+                override fun onError(error: Int) {
+                    val errorMsg = when (error) {
+                        SpeechRecognizer.ERROR_AUDIO -> "Error de audio"
+                        SpeechRecognizer.ERROR_CLIENT -> "Error del cliente"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Sin permisos"
+                        SpeechRecognizer.ERROR_NETWORK -> "Error de red"
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Timeout de red"
+                        SpeechRecognizer.ERROR_NO_MATCH -> "Sin coincidencias"
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Reconocedor ocupado"
+                        SpeechRecognizer.ERROR_SERVER -> "Error del servidor"
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout de voz"
+                        else -> "Error desconocido: $error"
+                    }
+                    Log.e(TAG, "❌ Error de reconocimiento: $errorMsg")
+                    isListening = false
+                    scheduleRestart()
+                }
+
+                override fun onResults(results: Bundle?) {
+                    handleResults(results)
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    handlePartialResults(partialResults)
+                }
+
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            }
+
+    private fun handleResults(results: Bundle?) {
+        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+        matches?.firstOrNull()?.let { recognizedText ->
+            recognitionCount++
+            Log.i(TAG, "📝 Reconocido [$recognitionCount]: $recognizedText")
+
+            // 🚨 PROCESAR ALERTAS POR TELEGRAM 🚨
+            processAlert(recognizedText)
+
+            // Enviar broadcast para la UI
+            val intent =
+                    Intent("VOICE_RECOGNIZED").apply {
+                        putExtra("recognized_text", recognizedText)
+                        putExtra("recognition_count", recognitionCount)
+                    }
+            sendBroadcast(intent)
+        }
+
+        isListening = false
+        scheduleRestart()
+    }
+
+    private fun handlePartialResults(partialResults: Bundle?) {
+        val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+        matches?.firstOrNull()?.let { partialText ->
+            // Procesar texto parcial para alertas más rápidas
+            if (partialText.contains("alerta", ignoreCase = true) || 
+                partialText.contains("auxilio", ignoreCase = true) ||
+                partialText.contains("ayuda", ignoreCase = true)) {
+                Log.w(TAG, "⚡ Alerta detectada en texto parcial: $partialText")
+                processAlert(partialText)
+            }
+
+            val intent = Intent("VOICE_PARTIAL").apply { putExtra("partial_text", partialText) }
+            sendBroadcast(intent)
+        }
+    }
+
+    private fun processAlert(text: String) {
+        try {
+            // Procesar con el sistema de alertas
+            alertService.processRecognizedText(text)
+            
+            // Si fue una alerta, incrementar contador
+            if (text.contains("alerta", ignoreCase = true) || 
+                text.contains("auxilio", ignoreCase = true) ||
+                text.contains("ayuda", ignoreCase = true)) {
+                alertCount++
+                updateNotification()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error procesando alerta: ${e.message}")
+        }
+    }
+
+    private fun updateNotification() {
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        val updatedNotification = createNotification()
+        notificationManager.notify(NOTIFICATION_ID, updatedNotification)
+    }
+
+    private fun startListening() {
+        if (isListening || !isRunning || !hasAudioPermission()) return
+
+        val intent =
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    putExtra(
+                            RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                            3000
+                    )
+                    putExtra(
+                            RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                            3000
+                    )
+                }
+
+        try {
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error iniciando reconocimiento", e)
+            scheduleRestart()
+        }
+    }
+
+    private fun scheduleRestart() {
+        if (!isRunning) return
+
+        android.os.Handler(android.os.Looper.getMainLooper())
+                .postDelayed(
+                        {
+                            if (isRunning && !isListening) {
+                                startListening()
+                            }
+                        },
+                        1000L
+                )
+    }
+
+    private fun hasAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock =
+                powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$TAG::WakeLock").apply {
+                    acquire(60 * 60 * 1000L)
+                }
+    }
+
+    private fun cleanup() {
+        isRunning = false
+        speechRecognizer?.destroy()
+        wakeLock?.let { if (it.isHeld) it.release() }
+        Log.d(TAG, "🧹 Limpieza del servicio completada")
+    }
+}
+
+package com.example.violenceapp.data
+
+/**
+ * Configuración de alertas para Telegram
+ * Simplificada para usar solo Telegram como canal de comunicación
+ */
+data class AlertConfiguration(
+        // Palabra clave que activa la alerta
+        val triggerWord: String = "alerta",
+        
+        // Plantilla del mensaje de emergencia
+        val messageTemplate: String = """
+🚨 <b>ALERTA DE EMERGENCIA</b> 🚨
+
+¡NECESITO AYUDA URGENTE!
+
+📍 <b>Ubicación:</b> {location}
+🕐 <b>Hora:</b> {time}
+🔊 <b>Activado por:</b> "{trigger}"
+
+⚠️ <i>Por favor contacta a las autoridades si no respondo en 15 minutos.</i>
+
+🤖 <i>Este mensaje fue enviado automáticamente por el sistema de reconocimiento de voz.</i>
+        """.trimIndent(),
+        
+        // Estado del sistema de alertas
+        val isEnabled: Boolean = true,
+        
+        // Configuraciones adicionales para Telegram
+        val sendLocation: Boolean = true,          // Enviar ubicación en tiempo real
+        val locationLivePeriod: Int = 300,         // 5 minutos de ubicación en vivo
+        val retryAttempts: Int = 3,                // Intentos de reenvío en caso de fallo
+        val retryDelaySeconds: Int = 5             // Delay entre intentos
+) {
+    /**
+     * Valida que la configuración sea correcta
+     */
+    fun isValid(): Boolean {
+        return triggerWord.isNotBlank() && 
+               messageTemplate.isNotBlank() &&
+               messageTemplate.contains("{location}") &&
+               messageTemplate.contains("{time}") &&
+               messageTemplate.contains("{trigger}")
+    }
+
+    /**
+     * Obtiene las palabras clave alternativas (variaciones de la palabra principal)
+     */
+    fun getTriggerVariations(): List<String> {
+        return listOf(
+            triggerWord.lowercase(),
+            triggerWord.uppercase(),
+            "auxilio",
+            "ayuda",
+            "socorro",
+            "emergencia",
+            "help"
+        )
+    }
+
+    /**
+     * Verifica si un texto contiene alguna palabra clave
+     */
+    fun containsTrigger(text: String): Boolean {
+        val normalizedText = text.lowercase()
+        return getTriggerVariations().any { trigger ->
+            normalizedText.contains(trigger.lowercase())
+        }
+    }
+
+    /**
+     * Formatea el mensaje reemplazando las variables
+     */
+    fun formatMessage(location: String, time: String, trigger: String): String {
+        return messageTemplate
+            .replace("{location}", location)
+            .replace("{time}", time)
+            .replace("{trigger}", trigger)
+    }
+
+    companion object {
+        /**
+         * Configuración por defecto para pruebas
+         */
+        fun createTestConfiguration(): AlertConfiguration {
+            return AlertConfiguration(
+                triggerWord = "prueba",
+                messageTemplate = """
+🧪 <b>MENSAJE DE PRUEBA</b>
+
+📍 <b>Ubicación:</b> {location}
+🕐 <b>Hora:</b> {time}
+🔊 <b>Activado por:</b> "{trigger}"
+
+✅ <i>Tu sistema de alertas de emergencia está funcionando correctamente.</i>
+                """.trimIndent(),
+                isEnabled = true
+            )
+        }
+
+        /**
+         * Configuración mínima para casos de emergencia real
+         */
+        fun createMinimalConfiguration(): AlertConfiguration {
+            return AlertConfiguration(
+                triggerWord = "alerta",
+                messageTemplate = """
+🚨 EMERGENCIA 🚨
+
+Ubicación: {location}
+Hora: {time}
+Detectado: "{trigger}"
+
+Contactar autoridades si no hay respuesta.
+                """.trimIndent(),
+                isEnabled = true
+            )
+        }
+    }
+}
+
+package com.example.violenceapp.services
+
+import android.content.Context
+import android.util.Log
+import com.example.violenceapp.data.AlertConfiguration
+import com.example.violenceapp.utils.LocationHelper
+import com.example.violenceapp.utils.TelegramHelper
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+class AlertService(private val context: Context) {
+
+    companion object {
+        private const val TAG = "AlertService"
+    }
+
+    private val locationHelper = LocationHelper(context)
+    private val telegramHelper = TelegramHelper(context)
+    private val alertConfig = AlertConfiguration()
+
+    private val coroutineScope = CoroutineScope(Dispatchers.IO)
+
+    /**
+     * Procesa texto reconocido y activa alerta si detecta palabra clave
+     */
+    fun processRecognizedText(text: String) {
+        if (!alertConfig.isEnabled) {
+            Log.d(TAG, "Alertas deshabilitadas")
+            return
+        }
+
+        // Verificar si el texto contiene la palabra clave (case insensitive)
+        if (text.contains(alertConfig.triggerWord, ignoreCase = true)) {
+            Log.w(TAG, "🚨 PALABRA CLAVE DETECTADA: '$text'")
+            triggerEmergencyAlert(text)
+        }
+    }
+
+    /**
+     * Activa alerta de emergencia completa
+     */
+    private fun triggerEmergencyAlert(triggeredText: String) {
+        Log.w(TAG, "🚨 ACTIVANDO ALERTA DE EMERGENCIA 🚨")
+
+        coroutineScope.launch {
+            try {
+                // Obtener ubicación actual
+                val locationString = locationHelper.getCurrentLocation() ?: "Ubicación no disponible"
+
+                // Obtener tiempo actual
+                val currentTime = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
+
+                // Preparar mensaje usando la plantilla
+                val emergencyMessage = alertConfig
+                        .messageTemplate
+                        .replace("{location}", locationString)
+                        .replace("{time}", currentTime)
+                        .replace("{trigger}", triggeredText)
+
+                Log.i(TAG, "Mensaje de emergencia preparado")
+
+                // 🚨 ENVÍO AUTOMÁTICO POR TELEGRAM 🚨
+                val messageSent = telegramHelper.sendAutomaticMessage(emergencyMessage)
+
+                if (messageSent) {
+                    Log.i(TAG, "✅ ALERTA ENVIADA EXITOSAMENTE POR TELEGRAM")
+                    
+                    // Intentar enviar ubicación en tiempo real si está disponible
+                    sendLiveLocationIfAvailable()
+                    
+                    // Mostrar notificación de éxito
+                    launch(Dispatchers.Main) { 
+                        showAlertSentNotification(emergencyMessage)
+                    }
+                } else {
+                    Log.e(TAG, "❌ FALLO AL ENVIAR ALERTA POR TELEGRAM")
+                    
+                    // Mostrar notificación de error
+                    launch(Dispatchers.Main) { 
+                        showAlertFailedNotification("Error de conexión o configuración")
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error procesando alerta de emergencia: ${e.message}")
+                launch(Dispatchers.Main) { 
+                    showAlertFailedNotification("Error interno: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Envía ubicación en tiempo real si está disponible
+     */
+    private suspend fun sendLiveLocationIfAvailable() {
+        try {
+            if (!locationHelper.hasLocationPermission()) {
+                Log.w(TAG, "Sin permisos de ubicación para envío en tiempo real")
+                return
+            }
+
+            // Intentar obtener coordenadas precisas para ubicación en vivo
+            val locationString = locationHelper.getCurrentLocation()
+            
+            if (locationString != null && locationString.contains("Lat:")) {
+                // Extraer coordenadas del string de ubicación
+                val latRegex = Regex("Lat: ([+-]?\\d*\\.?\\d+)")
+                val lonRegex = Regex("Lon: ([+-]?\\d*\\.?\\d+)")
+                
+                val latMatch = latRegex.find(locationString)
+                val lonMatch = lonRegex.find(locationString)
+                
+                if (latMatch != null && lonMatch != null) {
+                    val latitude = latMatch.groupValues[1].toDouble()
+                    val longitude = lonMatch.groupValues[1].toDouble()
+                    
+                    val locationSent = telegramHelper.sendLocationMessage(
+                        latitude, 
+                        longitude, 
+                        "📍 Ubicación en tiempo real - Emergencia activa"
+                    )
+                    
+                    if (locationSent) {
+                        Log.i(TAG, "✅ Ubicación en tiempo real enviada")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error enviando ubicación en tiempo real: ${e.message}")
+        }
+    }
+
+    /**
+     * Muestra notificación de alerta enviada exitosamente
+     */
+    private fun showAlertSentNotification(message: String) {
+        try {
+            val notificationManager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as
+                            android.app.NotificationManager
+
+            // Crear canal para alertas críticas
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel =
+                        android.app.NotificationChannel(
+                                        "emergency_alerts",
+                                        "Alertas de Emergencia",
+                                        android.app.NotificationManager.IMPORTANCE_HIGH
+                                )
+                                .apply {
+                                    description = "Notificaciones de alertas de emergencia enviadas por Telegram"
+                                    enableLights(true)
+                                    lightColor = android.graphics.Color.GREEN
+                                    enableVibration(true)
+                                    vibrationPattern = longArrayOf(0, 300, 200, 300, 200, 300)
+                                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val notification =
+                    androidx.core.app.NotificationCompat.Builder(context, "emergency_alerts")
+                            .setContentTitle("✅ Alerta Enviada por Telegram")
+                            .setContentText("Tu mensaje de emergencia fue enviado automáticamente")
+                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ALARM)
+                            .setVibrate(longArrayOf(0, 300, 200, 300))
+                            .setAutoCancel(true)
+                            .setStyle(
+                                    androidx.core.app.NotificationCompat.BigTextStyle()
+                                            .bigText("✅ Alerta enviada exitosamente por Telegram:\n\n${message.take(100)}...")
+                            )
+                            .build()
+
+            notificationManager.notify(9999, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error mostrando notificación de éxito: ${e.message}")
+        }
+    }
+
+    /**
+     * Muestra notificación de error al enviar alerta
+     */
+    private fun showAlertFailedNotification(errorDetails: String) {
+        try {
+            val notificationManager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as
+                            android.app.NotificationManager
+
+            val notification =
+                    androidx.core.app.NotificationCompat.Builder(context, "emergency_alerts")
+                            .setContentTitle("❌ Error Enviando Alerta")
+                            .setContentText("No se pudo enviar el mensaje por Telegram")
+                            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_ERROR)
+                            .setAutoCancel(true)
+                            .setStyle(
+                                    androidx.core.app.NotificationCompat.BigTextStyle()
+                                            .bigText("❌ Error: $errorDetails\n\nVerifica tu conexión y configuración de Telegram")
+                            )
+                            .build()
+
+            notificationManager.notify(9998, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error mostrando notificación de error: ${e.message}")
+        }
+    }
+
+    /**
+     * Valida la configuración de Telegram
+     */
+    suspend fun validateTelegramConfiguration(): Boolean {
+        return try {
+            telegramHelper.validateBotConfiguration()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error validando configuración de Telegram: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Envía mensaje de prueba
+     */
+    suspend fun sendTestAlert(): Boolean {
+        return try {
+            telegramHelper.sendTestMessage()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error enviando mensaje de prueba: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Obtiene información del bot configurado
+     */
+    suspend fun getBotInfo(): String? {
+        return try {
+            telegramHelper.getBotInfo()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error obteniendo información del bot: ${e.message}")
+            null
+        }
+    }
+
+    // Métodos de configuración para futuras actualizaciones
+    fun updateTriggerWord(newTriggerWord: String) {
+        Log.d(TAG, "Palabra clave sería actualizada a: $newTriggerWord")
+        // TODO: Implementar cuando tengamos configuración persistente
+    }
+
+    fun updateMessageTemplate(newTemplate: String) {
+        Log.d(TAG, "Plantilla de mensaje sería actualizada")
+        // TODO: Implementar cuando tengamos configuración persistente
+    }
+
+    fun isConfigurationValid(): Boolean {
+        return alertConfig.triggerWord.isNotBlank() &&
+                alertConfig.messageTemplate.isNotBlank()
+    }
+
+    /**
+     * Habilita o deshabilita el sistema de alertas
+     */
+    fun setAlertsEnabled(enabled: Boolean) {
+        // TODO: Implementar configuración persistente
+        Log.d(TAG, "Alertas ${if (enabled) "habilitadas" else "deshabilitadas"}")
+    }
+}
+
+package com.example.violenceapp
+
 import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -25,304 +758,454 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.violenceapp.ui.theme.ViolenceAppTheme
+import com.example.violenceapp.services.AlertService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    
+
     private var isServiceRunning by mutableStateOf(false)
     private var statusText by mutableStateOf("Estado: Inactivo")
     private var recognizedTexts by mutableStateOf(listOf<String>())
     private var partialText by mutableStateOf("")
     private var recognitionCount by mutableStateOf(0)
-    
-    private val voiceReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                "VOICE_RECOGNIZED" -> {
-                    val recognizedText = intent.getStringExtra("recognized_text") ?: ""
-                    val count = intent.getIntExtra("recognition_count", 0)
-                    
-                    recognizedTexts = recognizedTexts + recognizedText
-                    recognitionCount = count
-                    partialText = ""
-                }
-                "VOICE_PARTIAL" -> {
-                    val partial = intent.getStringExtra("partial_text") ?: ""
-                    partialText = partial
+    private var isTelegramConfigured by mutableStateOf(false)
+    private var telegramStatus by mutableStateOf("Verificando configuración...")
+
+    // Instancia del AlertService para validar configuración
+    private lateinit var alertService: AlertService
+
+    private val voiceReceiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        "VOICE_RECOGNIZED" -> {
+                            val recognizedText = intent.getStringExtra("recognized_text") ?: ""
+                            val count = intent.getIntExtra("recognition_count", 0)
+                            recognizedTexts = recognizedTexts + recognizedText
+                            recognitionCount = count
+                            partialText = ""
+                        }
+                        "VOICE_PARTIAL" -> {
+                            val partial = intent.getStringExtra("partial_text") ?: ""
+                            partialText = partial
+                        }
+                    }
                 }
             }
-        }
-    }
-    
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Permisos necesarios", Toast.LENGTH_LONG).show()
-        }
-    }
-    
+
+    private val requestPermissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+                    permissions ->
+                val allGranted = permissions.values.all { it }
+                if (allGranted) {
+                    Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show()
+                    // Verificar configuración de Telegram después de obtener permisos
+                    validateTelegramConfiguration()
+                } else {
+                    Toast.makeText(this, "Permisos necesarios para el funcionamiento", Toast.LENGTH_LONG).show()
+                }
+            }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
+        // Inicializar AlertService
+        alertService = AlertService(this)
+
         checkPermissions()
         registerVoiceReceiver()
-        
+        validateTelegramConfiguration()
+
         setContent {
-            MaterialTheme {
+            ViolenceAppTheme {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    VoiceRecognitionScreen()
-                }
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                ) { VoiceRecognitionScreen() }
             }
         }
     }
-    
+
     @Composable
     fun VoiceRecognitionScreen() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            // Header
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            // Header con estado del servicio
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
             ) {
                 Card(
-                    modifier = Modifier.size(60.dp),
-                    shape = RoundedCornerShape(30.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isServiceRunning) 
-                            MaterialTheme.colorScheme.primary 
-                        else 
-                            MaterialTheme.colorScheme.surfaceVariant
-                    )
+                        modifier = Modifier.size(60.dp),
+                        shape = RoundedCornerShape(30.dp),
+                        colors =
+                                CardDefaults.cardColors(
+                                        containerColor =
+                                                if (isServiceRunning)
+                                                        MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.surfaceVariant
+                                )
                 ) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (isServiceRunning) "🎤" else "🔇",
-                            fontSize = 24.sp
-                        )
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(text = if (isServiceRunning) "🎤" else "🔇", fontSize = 24.sp)
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.width(16.dp))
-                
+
                 Column {
                     Text(
-                        text = "Reconocimiento de Voz",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
+                            text = "Reconocimiento de Voz",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (recognitionCount > 0) "Textos: $recognitionCount" else statusText,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text =
+                                    if (recognitionCount > 0) "Textos: $recognitionCount"
+                                    else statusText,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Botones
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Estado de Telegram
+            Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                            containerColor = if (isTelegramConfigured) 
+                                MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.errorContainer
+                    )
             ) {
-                Button(
-                    onClick = { startVoiceService() },
-                    enabled = !isServiceRunning,
-                    modifier = Modifier.weight(1f)
+                Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Iniciar")
-                }
-                
-                OutlinedButton(
-                    onClick = { stopVoiceService() },
-                    enabled = isServiceRunning,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Detener")
-                }
-                
-                if (recognizedTexts.isNotEmpty()) {
-                    OutlinedButton(
-                        onClick = { 
-                            recognizedTexts = listOf()
-                            recognitionCount = 0
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Limpiar")
+                    Text(
+                            text = if (isTelegramConfigured) "✅" else "❌",
+                            fontSize = 20.sp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                                text = "Telegram Bot",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                                text = telegramStatus,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isServiceRunning && isTelegramConfigured) {
+                            Text(
+                                    text = "🚨 Envío automático activo: Di 'alerta'",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
+            // Botones
+            Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                        onClick = { startVoiceService() },
+                        enabled = !isServiceRunning && isTelegramConfigured,
+                        modifier = Modifier.weight(1f)
+                ) { 
+                    Text(if (!isTelegramConfigured) "⚠️ Config Bot" else "▶️ Iniciar")
+                }
+
+                OutlinedButton(
+                        onClick = { stopVoiceService() },
+                        enabled = isServiceRunning,
+                        modifier = Modifier.weight(1f)
+                ) { Text("⏸️ Detener") }
+
+                OutlinedButton(
+                        onClick = { validateTelegramConfiguration() },
+                        modifier = Modifier.weight(1f)
+                ) { Text("🔄 Verificar") }
+            }
+
+            if (recognizedTexts.isNotEmpty()) {
+                Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                            onClick = {
+                                recognizedTexts = listOf()
+                                recognitionCount = 0
+                            },
+                            modifier = Modifier.weight(1f)
+                    ) { Text("🗑️ Limpiar") }
+
+                    OutlinedButton(
+                            onClick = { testTelegramMessage() },
+                            enabled = isTelegramConfigured,
+                            modifier = Modifier.weight(1f)
+                    ) { Text("📤 Test Telegram") }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Texto parcial
             if (partialText.isNotEmpty()) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
+                        modifier = Modifier.fillMaxWidth(),
+                        colors =
+                                CardDefaults.cardColors(
+                                        containerColor =
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                )
                 ) {
                     Text(
-                        text = "🔄 $partialText",
-                        modifier = Modifier.padding(16.dp),
-                        fontSize = 16.sp
+                            text = "🔄 $partialText",
+                            modifier = Modifier.padding(16.dp),
+                            fontSize = 16.sp
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
-            
-            // Lista de textos
+
+            // Lista de textos reconocidos
             if (recognizedTexts.isNotEmpty()) {
                 Text(
-                    text = "Textos Reconocidos:",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(vertical = 8.dp)
+                        text = "Textos Reconocidos:",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(vertical = 8.dp)
                 )
-                
+
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    reverseLayout = true
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        reverseLayout = true
                 ) {
                     itemsIndexed(recognizedTexts.reversed()) { index, text ->
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                            )
+                                modifier = Modifier.fillMaxWidth(),
+                                colors =
+                                        CardDefaults.cardColors(
+                                                containerColor = if (text.contains("alerta", ignoreCase = true))
+                                                        MaterialTheme.colorScheme.errorContainer
+                                                else MaterialTheme.colorScheme.primaryContainer
+                                        )
                         ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
-                            ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                            text = "#${recognizedTexts.size - index}",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                    if (text.contains("alerta", ignoreCase = true)) {
+                                        Text(
+                                                text = "🚨 ALERTA",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
                                 Text(
-                                    text = "#${recognizedTexts.size - index}",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                )
-                                Text(
-                                    text = text,
-                                    fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        text = text,
+                                        fontSize = 16.sp,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             }
                         }
                     }
                 }
             } else if (isServiceRunning) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "🎤 Esperando que hables...",
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                                text = "🎤 Esperando que hables...",
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                        )
+                        if (isTelegramConfigured) {
+                            Text(
+                                    text = "Di 'alerta' para enviar mensaje automático",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
             } else {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Presiona 'Iniciar' para comenzar\nel reconocimiento de voz",
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                                text = if (isTelegramConfigured) 
+                                    "Presiona 'Iniciar' para comenzar\nel reconocimiento de voz"
+                                else "Configura el bot de Telegram\nprimero para continuar",
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
     }
-    
+
     private fun checkPermissions() {
         val permissions = mutableListOf<String>()
-        
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+                        PackageManager.PERMISSION_GRANTED
+        ) {
             permissions.add(Manifest.permission.RECORD_AUDIO)
         }
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                            PackageManager.PERMISSION_GRANTED
+            ) {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        
+
+        // Permisos para ubicación
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+                        PackageManager.PERMISSION_GRANTED
+        ) {
+            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        // Permisos para internet (Telegram)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.INTERNET) !=
+                        PackageManager.PERMISSION_GRANTED
+        ) {
+            permissions.add(Manifest.permission.INTERNET)
+        }
+
         if (permissions.isNotEmpty()) {
             requestPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
-    
-    private fun registerVoiceReceiver() {
-        val filter = IntentFilter().apply {
-            addAction("VOICE_RECOGNIZED")
-            addAction("VOICE_PARTIAL")
+
+    private fun validateTelegramConfiguration() {
+        telegramStatus = "Verificando..."
+        isTelegramConfigured = false
+
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val isValid = alertService.validateTelegramConfiguration()
+                
+                if (isValid) {
+                    telegramStatus = "Bot configurado correctamente"
+                    isTelegramConfigured = true
+                    Toast.makeText(this@MainActivity, "✅ Telegram configurado", Toast.LENGTH_SHORT).show()
+                } else {
+                    telegramStatus = "Error: Revisa BOT_TOKEN y CHAT_ID"
+                    isTelegramConfigured = false
+                    Toast.makeText(this@MainActivity, "❌ Error en configuración de Telegram", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                telegramStatus = "Error de conexión: ${e.message}"
+                isTelegramConfigured = false
+                Toast.makeText(this@MainActivity, "❌ Error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
+    }
+
+    private fun testTelegramMessage() {
+        if (!isTelegramConfigured) {
+            Toast.makeText(this, "Configura Telegram primero", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Simular una alerta de prueba
+                alertService.processRecognizedText("alerta de prueba")
+                Toast.makeText(this@MainActivity, "📤 Mensaje de prueba enviado", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "❌ Error enviando prueba: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun registerVoiceReceiver() {
+        val filter =
+                IntentFilter().apply {
+                    addAction("VOICE_RECOGNIZED")
+                    addAction("VOICE_PARTIAL")
+                }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(voiceReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(voiceReceiver, filter)
         }
     }
-    
+
     private fun startVoiceService() {
+        if (!isTelegramConfigured) {
+            Toast.makeText(this, "Configura Telegram antes de iniciar", Toast.LENGTH_LONG).show()
+            return
+        }
+
         try {
-            val intent = Intent(this, VoiceRecognitionService::class.java).apply {
-                action = "START_RECOGNITION"
-            }
-            
+            val intent =
+                    Intent(this, VoiceRecognitionService::class.java).apply {
+                        action = "START_RECOGNITION"
+                    }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
                 startService(intent)
             }
-            
+
             isServiceRunning = true
-            statusText = "Estado: Servicio iniciado"
-            
+            statusText = "Estado: Servicio iniciado con Telegram"
         } catch (e: Exception) {
             Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-    
+
     private fun stopVoiceService() {
         try {
-            val intent = Intent(this, VoiceRecognitionService::class.java).apply {
-                action = "STOP_RECOGNITION"
-            }
+            val intent =
+                    Intent(this, VoiceRecognitionService::class.java).apply {
+                        action = "STOP_RECOGNITION"
+                    }
             startService(intent)
-            
+
             isServiceRunning = false
             statusText = "Estado: Servicio detenido"
             recognizedTexts = listOf()
             partialText = ""
             recognitionCount = 0
-            
         } catch (e: Exception) {
             Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -332,336 +1215,268 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+package com.example.violenceapp.utils
 
-package com.example.violenceapp
-
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.os.IBinder
-import android.os.PowerManager
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.content.Context
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
-import java.util.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import org.json.JSONObject
 
-class VoiceRecognitionService : Service() {
-    
+class TelegramHelper(private val context: Context) {
+
     companion object {
-        private const val TAG = "VoiceRecognitionService"
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "voice_recognition_channel"
-        private const val CHANNEL_NAME = "Reconocimiento de Voz"
-    }
-    
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var isRunning = false
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var isListening = false
-    private var recognitionCount = 0
-    private var currentStatus = "Grabando..."
-    
-    override fun onCreate() {
-        super.onCreate()
-        Log.d(TAG, "Service created")
-        createNotificationChannel()
-        acquireWakeLock()
-        setupSpeechRecognizer()
-    }
-    
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service started with action: ${intent?.action}")
+        private const val TAG = "TelegramHelper"
         
-        when (intent?.action) {
-            "START_RECOGNITION" -> {
-                Log.d(TAG, "Starting voice recognition")
-                startForegroundService()
-                isRunning = true
-                startVoiceRecognition()
-            }
-            "STOP_RECOGNITION" -> {
-                Log.d(TAG, "Stopping voice recognition")
-                isRunning = false
-                stopVoiceRecognition()
-                stopForeground(true)
-                stopSelf()
-            }
-        }
+        // 🚨 CONFIGURACIÓN DEL BOT - REEMPLAZAR CON TUS DATOS REALES
+        private const val BOT_TOKEN = "8397338322:AAGlGZM3p2ZPVjrT68l5RTD8KZvk9vEjS3o"
+        private const val CHAT_ID = "TU_CHAT_ID_AQUI" // Cambiar por tu chat ID numérico
         
-        return START_STICKY
+        private const val TELEGRAM_API_URL = "https://api.telegram.org/bot"
     }
-    
-    override fun onBind(intent: Intent?): IBinder? = null
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "Service destroyed")
-        isRunning = false
-        stopVoiceRecognition()
-        releaseWakeLock()
-        speechRecognizer?.destroy()
-    }
-    
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            
-            // Verificar si el canal ya existe
-            val existingChannel = notificationManager.getNotificationChannel(CHANNEL_ID)
-            if (existingChannel != null) {
-                Log.d(TAG, "Channel exists with importance: ${existingChannel.importance}")
-                // Si existe pero con importancia baja, eliminarlo para recrearlo
-                if (existingChannel.importance < NotificationManager.IMPORTANCE_DEFAULT) {
-                    notificationManager.deleteNotificationChannel(CHANNEL_ID)
-                    Log.d(TAG, "Deleted existing low-importance channel")
+
+    /**
+     * Envía mensaje automáticamente por Telegram
+     * ✅ Completamente automático sin intervención del usuario
+     * ✅ Funciona en background
+     */
+    suspend fun sendAutomaticMessage(message: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (BOT_TOKEN.isEmpty() || CHAT_ID == "TU_CHAT_ID_AQUI") {
+                    Log.e(TAG, "❌ Bot token o chat ID no configurados")
+                    return@withContext false
                 }
-            }
-            
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "IMPORTANTE: Notificaciones de reconocimiento de voz en segundo plano"
-                setShowBadge(true)
-                enableLights(true)
-                lightColor = android.graphics.Color.RED
-                enableVibration(true)
-                vibrationPattern = longArrayOf(100, 200, 300, 400)
-                setSound(
-                    android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
-                    android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setBypassDnd(false)
-            }
-            
-            notificationManager.createNotificationChannel(channel)
-            Log.d(TAG, "Created notification channel with ID: $CHANNEL_ID")
-            
-            // Verificar que se creó correctamente
-            val createdChannel = notificationManager.getNotificationChannel(CHANNEL_ID)
-            Log.d(TAG, "Channel created with importance: ${createdChannel?.importance}")
-            
-            // Para Samsung, forzar configuraciones especiales
-            if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) {
-                Log.d(TAG, "Samsung device detected - applying special settings")
-                channel.importance = NotificationManager.IMPORTANCE_HIGH
-            }
-        } else {
-            Log.d(TAG, "Android version < O, no channel creation needed")
-        }
-    }
-    
-    private fun startForegroundService() {
-        currentStatus = "Grabando..."
-        val notification = createNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        Log.d(TAG, "Foreground service started")
-    }
-    
-    private fun createNotification(): Notification {
-        // Intent para abrir la app
-        val openAppIntent = Intent(this, MainActivity::class.java)
-        val openAppPendingIntent = PendingIntent.getActivity(
-            this, 0, openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Intent para detener el servicio
-        val stopIntent = Intent(this, VoiceRecognitionService::class.java).apply {
-            action = "STOP_RECOGNITION"
-        }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 0, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        // Construir notificación expandible
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🎤 Reconocimiento de Voz")
-            .setContentText(currentStatus)
-            .setSubText("Reconocimientos: $recognitionCount")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(openAppPendingIntent)
-            .addAction(
-                android.R.drawable.ic_media_pause,
-                "Detener",
-                stopPendingIntent
-            )
-            .addAction(
-                android.R.drawable.ic_menu_view,
-                "Abrir App",
-                openAppPendingIntent
-            )
-            .setStyle(NotificationCompat.BigTextStyle()
-                .bigText("$currentStatus\n\nReconocimientos totales: $recognitionCount\nEstado: ${if (isListening) "Escuchando" else "En espera"}")
-                .setBigContentTitle("🎤 Reconocimiento de Voz Activo")
-            )
-        
-        return builder.build()
-    }
-    
-    private fun acquireWakeLock() {
-        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "$TAG::WakeLock"
-        ).apply {
-            acquire(60 * 60 * 1000L)
-        }
-        Log.d(TAG, "WakeLock acquired")
-    }
-    
-    private fun releaseWakeLock() {
-        wakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-                Log.d(TAG, "WakeLock released")
-            }
-        }
-    }
-    
-    private fun setupSpeechRecognizer() {
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "Audio permission not granted")
-            currentStatus = "❌ Sin permisos de audio"
-            updateNotification()
-            return
-        }
-        
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                Log.d(TAG, "Ready for speech")
-                isListening = true
-            }
-            
-            override fun onBeginningOfSpeech() {
-                Log.d(TAG, "Beginning of speech")
-            }
-            
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            
-            override fun onEndOfSpeech() {
-                Log.d(TAG, "End of speech")
-            }
-            
-            override fun onError(error: Int) {
-                Log.e(TAG, "Speech recognition error: $error")
-                isListening = false
+
+                val url = URL("$TELEGRAM_API_URL$BOT_TOKEN/sendMessage")
+                val connection = url.openConnection() as HttpURLConnection
+
+                connection.apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                    setRequestProperty("User-Agent", "EmergencyApp/1.0")
+                    doOutput = true
+                    connectTimeout = 15000 // 15 segundos
+                    readTimeout = 20000    // 20 segundos
+                }
+
+                // Formatear mensaje con HTML
+                val formattedMessage = formatEmergencyMessage(message)
                 
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    if (isRunning && !isListening) {
-                        startListening()
+                // Preparar datos para envío
+                val postData = "chat_id=${URLEncoder.encode(CHAT_ID, "UTF-8")}" +
+                        "&text=${URLEncoder.encode(formattedMessage, "UTF-8")}" +
+                        "&parse_mode=HTML" +
+                        "&disable_web_page_preview=false"
+
+                // Enviar request
+                OutputStreamWriter(connection.outputStream).use { writer ->
+                    writer.write(postData)
+                    writer.flush()
+                }
+
+                // Procesar respuesta
+                val responseCode = connection.responseCode
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val jsonResponse = JSONObject(response)
+                    
+                    if (jsonResponse.getBoolean("ok")) {
+                        Log.i(TAG, "✅ MENSAJE DE EMERGENCIA ENVIADO POR TELEGRAM")
+                        return@withContext true
+                    } else {
+                        val errorDesc = jsonResponse.optString("description", "Error desconocido")
+                        Log.e(TAG, "❌ Error en respuesta de Telegram: $errorDesc")
+                        return@withContext false
                     }
-                }, 2000)
+                } else {
+                    val errorResponse = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                    Log.e(TAG, "❌ Error HTTP $responseCode: $errorResponse")
+                    return@withContext false
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error enviando mensaje por Telegram: ${e.message}")
+                return@withContext false
             }
-            
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.let { resultList ->
-                    if (resultList.isNotEmpty()) {
-                        val recognizedText = resultList[0]
-                        recognitionCount++
-                        
-                        Log.i(TAG, "Recognized [$recognitionCount]: $recognizedText")
-                        
-                        // Enviar broadcast a la app
-                        val broadcastIntent = Intent("VOICE_RECOGNIZED").apply {
-                            putExtra("recognized_text", recognizedText)
-                            putExtra("recognition_count", recognitionCount)
-                        }
-                        sendBroadcast(broadcastIntent)
+        }
+    }
+
+    /**
+     * Envía ubicación en tiempo real por Telegram
+     */
+    suspend fun sendLocationMessage(latitude: Double, longitude: Double, caption: String = ""): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (BOT_TOKEN.isEmpty() || CHAT_ID == "TU_CHAT_ID_AQUI") {
+                    Log.e(TAG, "❌ Bot token o chat ID no configurados")
+                    return@withContext false
+                }
+
+                val url = URL("$TELEGRAM_API_URL$BOT_TOKEN/sendLocation")
+                val connection = url.openConnection() as HttpURLConnection
+
+                connection.apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                    doOutput = true
+                    connectTimeout = 15000
+                    readTimeout = 20000
+                }
+
+                val postData = "chat_id=${URLEncoder.encode(CHAT_ID, "UTF-8")}" +
+                        "&latitude=$latitude" +
+                        "&longitude=$longitude" +
+                        "&live_period=300" + // Ubicación en vivo por 5 minutos
+                        if (caption.isNotEmpty()) "&caption=${URLEncoder.encode(caption, "UTF-8")}" else ""
+
+                OutputStreamWriter(connection.outputStream).use { writer ->
+                    writer.write(postData)
+                    writer.flush()
+                }
+
+                val responseCode = connection.responseCode
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    Log.i(TAG, "✅ UBICACIÓN ENVIADA POR TELEGRAM")
+                    return@withContext true
+                } else {
+                    Log.e(TAG, "❌ Error enviando ubicación: HTTP $responseCode")
+                    return@withContext false
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error enviando ubicación por Telegram: ${e.message}")
+                return@withContext false
+            }
+        }
+    }
+
+    /**
+     * Valida la configuración del bot
+     */
+    suspend fun validateBotConfiguration(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (BOT_TOKEN.isEmpty() || BOT_TOKEN == "TU_BOT_TOKEN_AQUI") {
+                    Log.e(TAG, "❌ Bot token no configurado")
+                    return@withContext false
+                }
+
+                if (CHAT_ID.isEmpty() || CHAT_ID == "TU_CHAT_ID_AQUI") {
+                    Log.e(TAG, "❌ Chat ID no configurado")
+                    return@withContext false
+                }
+
+                val url = URL("$TELEGRAM_API_URL$BOT_TOKEN/getMe")
+                val connection = url.openConnection() as HttpURLConnection
+                
+                connection.apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                }
+
+                val responseCode = connection.responseCode
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val jsonResponse = JSONObject(response)
+                    
+                    if (jsonResponse.getBoolean("ok")) {
+                        val botInfo = jsonResponse.getJSONObject("result")
+                        val botName = botInfo.getString("username")
+                        val botFirstName = botInfo.getString("first_name")
+                        Log.i(TAG, "✅ Bot configurado: $botFirstName (@$botName)")
+                        return@withContext true
                     }
                 }
                 
-                isListening = false
-                
-                // Continuar escuchando después de 1 segundo
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    if (isRunning) {
-                        startListening()
-                    }
-                }, 1000)
+                Log.e(TAG, "❌ Bot token inválido o bot inactivo")
+                return@withContext false
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error validando bot: ${e.message}")
+                return@withContext false
             }
-            
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.let {
-                    if (it.isNotEmpty()) {
-                        Log.d(TAG, "Partial result: ${it[0]}")
-                        // Enviar resultado parcial a la app
-                        val broadcastIntent = Intent("VOICE_PARTIAL").apply {
-                            putExtra("partial_text", it[0])
-                        }
-                        sendBroadcast(broadcastIntent)
+        }
+    }
+
+    /**
+     * Envía mensaje de prueba
+     */
+    suspend fun sendTestMessage(): Boolean {
+        val testMessage = """
+🧪 <b>MENSAJE DE PRUEBA</b>
+
+✅ Tu bot de Telegram está funcionando correctamente
+🕐 Hora: ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}
+🚨 Listo para enviar alertas de emergencia automáticamente
+
+<i>Este es un mensaje de prueba del sistema de alertas</i>
+        """.trimIndent()
+        
+        return sendAutomaticMessage(testMessage)
+    }
+
+    /**
+     * Formatea el mensaje de emergencia con HTML
+     */
+    private fun formatEmergencyMessage(message: String): String {
+        return """
+🚨 <b>ALERTA DE EMERGENCIA</b> 🚨
+
+$message
+
+⚠️ <i>Este mensaje fue enviado automáticamente por el sistema de reconocimiento de voz</i>
+        """.trimIndent()
+    }
+
+    /**
+     * Obtiene información del bot configurado
+     */
+    suspend fun getBotInfo(): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (BOT_TOKEN.isEmpty() || BOT_TOKEN == "TU_BOT_TOKEN_AQUI") {
+                    return@withContext null
+                }
+
+                val url = URL("$TELEGRAM_API_URL$BOT_TOKEN/getMe")
+                val connection = url.openConnection() as HttpURLConnection
+                
+                connection.apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+
+                val responseCode = connection.responseCode
+                
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    val jsonResponse = JSONObject(response)
+                    
+                    if (jsonResponse.getBoolean("ok")) {
+                        val botInfo = jsonResponse.getJSONObject("result")
+                        val botName = botInfo.getString("username")
+                        val botFirstName = botInfo.getString("first_name")
+                        return@withContext "$botFirstName (@$botName)"
                     }
                 }
+                
+                return@withContext null
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error obteniendo info del bot: ${e.message}")
+                return@withContext null
             }
-            
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-    }
-    
-    private fun startVoiceRecognition() {
-        Log.d(TAG, "Starting voice recognition")
-        currentStatus = "🚀 Iniciando reconocimiento..."
-        updateNotification()
-        startListening()
-    }
-    
-    private fun startListening() {
-        if (isListening || !isRunning) return
-        
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
         }
-        
-        try {
-            speechRecognizer?.startListening(intent)
-            Log.d(TAG, "Speech recognizer started listening")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting speech recognizer: ${e.message}")
-            currentStatus = "❌ Error al iniciar: ${e.message}"
-            updateNotification()
-        }
-    }
-    
-    private fun stopVoiceRecognition() {
-        Log.d(TAG, "Stopping voice recognition")
-        isListening = false
-        speechRecognizer?.stopListening()
-        currentStatus = "🛑 Detenido"
-        updateNotification()
-    }
-    
-    private fun updateNotification() {
-        val notification = createNotification()
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 }
+

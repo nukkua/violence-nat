@@ -33,17 +33,14 @@ class MainActivity : FragmentActivity() {
     var hasMicrophonePermission by mutableStateOf(false)
         private set
 
-    // Código de solicitud para permisos (debe estar entre 0 y 65535)
     private val PERMISSION_REQUEST_CODE = 1001
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Inicializar managers
         biometricAuthManager = BiometricAuthManager(this)
         sharedPreferencesManager = SharedPreferencesManager(this)
 
-        // Verificar permisos al inicio
         checkInitialPermissions()
 
         setContent {
@@ -63,6 +60,9 @@ class MainActivity : FragmentActivity() {
         // Crear ViewModel con Factory
         val appViewModel: AppViewModel =
                 viewModel(factory = AppViewModelFactory(sharedPreferencesManager))
+
+        // IMPORTANTE: Inicializar el contexto en el ViewModel
+        LaunchedEffect(appViewModel) { appViewModel.initializeContext(this@MainActivity) }
 
         if (isAuthenticated) {
             // Una vez autenticado, mostrar la navegación principal
@@ -90,7 +90,7 @@ class MainActivity : FragmentActivity() {
                         PackageManager.PERMISSION_GRANTED
     }
 
-    // Función específica para llamadas desde Compose usando requestPermissions tradicional
+    // Función específica para llamadas desde Compose
     private fun requestMicrophonePermissionFromCompose() {
         try {
             val permissions = mutableListOf<String>()
