@@ -23,9 +23,7 @@ class AlertService(private val context: Context) {
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
-    /**
-     * Procesa texto reconocido y activa alerta si detecta palabra clave
-     */
+    /** Procesa texto reconocido y activa alerta si detecta palabra clave */
     fun processRecognizedText(text: String) {
         if (!alertConfig.isEnabled) {
             Log.d(TAG, "Alertas deshabilitadas")
@@ -39,26 +37,27 @@ class AlertService(private val context: Context) {
         }
     }
 
-    /**
-     * Activa alerta de emergencia completa
-     */
+    /** Activa alerta de emergencia completa */
     private fun triggerEmergencyAlert(triggeredText: String) {
         Log.w(TAG, "🚨 ACTIVANDO ALERTA DE EMERGENCIA 🚨")
 
         coroutineScope.launch {
             try {
-                // Obtener ubicación actual
-                val locationString = locationHelper.getCurrentLocation() ?: "Ubicación no disponible"
+                // Obtener ubicación actual EN TIEMPO REAL
+                val locationString =
+                        locationHelper.getCurrentLocation() ?: "Ubicación no disponible"
 
                 // Obtener tiempo actual
-                val currentTime = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
+                val currentTime =
+                        SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(Date())
 
                 // Preparar mensaje usando la plantilla
-                val emergencyMessage = alertConfig
-                        .messageTemplate
-                        .replace("{location}", locationString)
-                        .replace("{time}", currentTime)
-                        .replace("{trigger}", triggeredText)
+                val emergencyMessage =
+                        alertConfig
+                                .messageTemplate
+                                .replace("{location}", locationString)
+                                .replace("{time}", currentTime)
+                                .replace("{trigger}", triggeredText)
 
                 Log.i(TAG, "Mensaje de emergencia preparado")
 
@@ -67,35 +66,30 @@ class AlertService(private val context: Context) {
 
                 if (messageSent) {
                     Log.i(TAG, "✅ ALERTA ENVIADA EXITOSAMENTE POR TELEGRAM")
-                    
+
                     // Intentar enviar ubicación en tiempo real si está disponible
                     sendLiveLocationIfAvailable()
-                    
+
                     // Mostrar notificación de éxito
-                    launch(Dispatchers.Main) { 
-                        showAlertSentNotification(emergencyMessage)
-                    }
+                    launch(Dispatchers.Main) { showAlertSentNotification(emergencyMessage) }
                 } else {
                     Log.e(TAG, "❌ FALLO AL ENVIAR ALERTA POR TELEGRAM")
-                    
+
                     // Mostrar notificación de error
-                    launch(Dispatchers.Main) { 
+                    launch(Dispatchers.Main) {
                         showAlertFailedNotification("Error de conexión o configuración")
                     }
                 }
-
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error procesando alerta de emergencia: ${e.message}")
-                launch(Dispatchers.Main) { 
+                launch(Dispatchers.Main) {
                     showAlertFailedNotification("Error interno: ${e.message}")
                 }
             }
         }
     }
 
-    /**
-     * Envía ubicación en tiempo real si está disponible
-     */
+    /** Envía ubicación en tiempo real si está disponible */
     private suspend fun sendLiveLocationIfAvailable() {
         try {
             if (!locationHelper.hasLocationPermission()) {
@@ -103,40 +97,33 @@ class AlertService(private val context: Context) {
                 return
             }
 
-            // Intentar obtener coordenadas precisas para ubicación en vivo
-            val locationString = locationHelper.getCurrentLocation()
-            
-            if (locationString != null && locationString.contains("Lat:")) {
-                // Extraer coordenadas del string de ubicación
-                val latRegex = Regex("Lat: ([+-]?\\d*\\.?\\d+)")
-                val lonRegex = Regex("Lon: ([+-]?\\d*\\.?\\d+)")
-                
-                val latMatch = latRegex.find(locationString)
-                val lonMatch = lonRegex.find(locationString)
-                
-                if (latMatch != null && lonMatch != null) {
-                    val latitude = latMatch.groupValues[1].toDouble()
-                    val longitude = lonMatch.groupValues[1].toDouble()
-                    
-                    val locationSent = telegramHelper.sendLocationMessage(
-                        latitude, 
-                        longitude, 
-                        "📍 Ubicación en tiempo real - Emergencia activa"
-                    )
-                    
-                    if (locationSent) {
-                        Log.i(TAG, "✅ Ubicación en tiempo real enviada")
-                    }
+            // Obtener coordenadas precisas EN TIEMPO REAL
+            val coordinates = locationHelper.getCurrentCoordinates()
+
+            if (coordinates != null) {
+                val (latitude, longitude) = coordinates
+
+                val locationSent =
+                        telegramHelper.sendLocationMessage(
+                                latitude,
+                                longitude,
+                                "📍 Ubicación EN TIEMPO REAL - Emergencia activa"
+                        )
+
+                if (locationSent) {
+                    Log.i(TAG, "✅ Ubicación en tiempo real enviada: $latitude, $longitude")
+                } else {
+                    Log.e(TAG, "❌ Error enviando ubicación en tiempo real")
                 }
+            } else {
+                Log.w(TAG, "⚠️ No se pudo obtener ubicación actual")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error enviando ubicación en tiempo real: ${e.message}")
         }
     }
 
-    /**
-     * Muestra notificación de alerta enviada exitosamente
-     */
+    /** Muestra notificación de alerta enviada exitosamente */
     private fun showAlertSentNotification(message: String) {
         try {
             val notificationManager =
@@ -152,7 +139,8 @@ class AlertService(private val context: Context) {
                                         android.app.NotificationManager.IMPORTANCE_HIGH
                                 )
                                 .apply {
-                                    description = "Notificaciones de alertas de emergencia enviadas por Telegram"
+                                    description =
+                                            "Notificaciones de alertas de emergencia enviadas por Telegram"
                                     enableLights(true)
                                     lightColor = android.graphics.Color.GREEN
                                     enableVibration(true)
@@ -172,7 +160,9 @@ class AlertService(private val context: Context) {
                             .setAutoCancel(true)
                             .setStyle(
                                     androidx.core.app.NotificationCompat.BigTextStyle()
-                                            .bigText("✅ Alerta enviada exitosamente por Telegram:\n\n${message.take(100)}...")
+                                            .bigText(
+                                                    "✅ Alerta enviada exitosamente por Telegram:\n\n${message.take(100)}..."
+                                            )
                             )
                             .build()
 
@@ -182,9 +172,7 @@ class AlertService(private val context: Context) {
         }
     }
 
-    /**
-     * Muestra notificación de error al enviar alerta
-     */
+    /** Muestra notificación de error al enviar alerta */
     private fun showAlertFailedNotification(errorDetails: String) {
         try {
             val notificationManager =
@@ -201,7 +189,9 @@ class AlertService(private val context: Context) {
                             .setAutoCancel(true)
                             .setStyle(
                                     androidx.core.app.NotificationCompat.BigTextStyle()
-                                            .bigText("❌ Error: $errorDetails\n\nVerifica tu conexión y configuración de Telegram")
+                                            .bigText(
+                                                    "❌ Error: $errorDetails\n\nVerifica tu conexión y configuración de Telegram"
+                                            )
                             )
                             .build()
 
@@ -211,9 +201,7 @@ class AlertService(private val context: Context) {
         }
     }
 
-    /**
-     * Valida la configuración de Telegram
-     */
+    /** Valida la configuración de Telegram */
     suspend fun validateTelegramConfiguration(): Boolean {
         return try {
             telegramHelper.validateBotConfiguration()
@@ -223,9 +211,7 @@ class AlertService(private val context: Context) {
         }
     }
 
-    /**
-     * Envía mensaje de prueba
-     */
+    /** Envía mensaje de prueba */
     suspend fun sendTestAlert(): Boolean {
         return try {
             telegramHelper.sendTestMessage()
@@ -235,9 +221,7 @@ class AlertService(private val context: Context) {
         }
     }
 
-    /**
-     * Obtiene información del bot configurado
-     */
+    /** Obtiene información del bot configurado */
     suspend fun getBotInfo(): String? {
         return try {
             telegramHelper.getBotInfo()
