@@ -32,7 +32,11 @@ sealed class Screen(val route: String, val title: String, val emoji: String) {
 }
 
 @Composable
-fun ViolenceAppNavigation(viewModel: AppViewModel) {
+fun ViolenceAppNavigation(
+        viewModel: AppViewModel,
+        hasMicrophonePermission: Boolean = false,
+        onRequestMicrophonePermission: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -50,7 +54,12 @@ fun ViolenceAppNavigation(viewModel: AppViewModel) {
                 modifier = Modifier.fillMaxSize()
         ) {
             composable(Screen.Home.route) {
-                HomeScreen(navController = navController, appViewModel = viewModel)
+                HomeScreen(
+                        navController = navController,
+                        appViewModel = viewModel,
+                        hasMicrophonePermission = hasMicrophonePermission,
+                        onRequestMicrophonePermission = onRequestMicrophonePermission
+                )
             }
             composable(Screen.Setup.route) {
                 SetupScreen(navController = navController, appViewModel = viewModel)
@@ -149,7 +158,7 @@ fun NavBarItem(
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     color =
                             if (isSelected) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     maxLines = 1
             )
         }

@@ -13,8 +13,13 @@ import androidx.navigation.NavController
 import com.example.violenceapp.viewmodel.AppViewModel
 
 @Composable
-fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel? = null) {
-    // Usar estados del ViewModel
+fun HomeScreen(
+        navController: NavController? = null,
+        appViewModel: AppViewModel? = null,
+        hasMicrophonePermission: Boolean = false,
+        onRequestMicrophonePermission: () -> Unit = {}
+) {
+    // Estados del ViewModel
     val keywordState = appViewModel?.keywordState
     val serviceState = appViewModel?.serviceState
     val configState = appViewModel?.configState
@@ -42,23 +47,61 @@ fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel?
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // Permission Warning Card (si no tiene permiso)
+        if (!hasMicrophonePermission) {
+            Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                            CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                            )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                                text = "⚠️ Permiso Requerido",
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                            text =
+                                    "ViolenceApp necesita acceso al micrófono para escuchar la palabra clave de emergencia.",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onRequestMicrophonePermission) { Text("Conceder Permiso") }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // Status Card
         Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors =
                         CardDefaults.cardColors(
                                 containerColor =
-                                        if (isServiceRunning)
-                                                MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceVariant
+                                        when {
+                                            !hasMicrophonePermission ->
+                                                    MaterialTheme.colorScheme.surfaceVariant
+                                            isServiceRunning ->
+                                                    MaterialTheme.colorScheme.primaryContainer
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        }
                         )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                             text =
-                                    if (isServiceRunning) "🔊 🔴 Protección Activa"
-                                    else "🔇 ⚪ Protección Inactiva",
+                                    when {
+                                        !hasMicrophonePermission -> "🔇 ⚪ Sin Permisos"
+                                        isServiceRunning -> "🔊 🔴 Protección Activa"
+                                        else -> "🔇 ⚪ Protección Inactiva"
+                                    },
                             fontWeight = FontWeight.Medium
                     )
                 }
@@ -67,11 +110,15 @@ fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel?
 
                 Text(
                         text =
-                                if (isServiceRunning)
-                                        "Escuchando palabra clave: \"$currentKeyword\""
-                                else if (isKeywordConfigured)
-                                        "Palabra configurada: \"$currentKeyword\""
-                                else "Configura una palabra clave primero",
+                                when {
+                                    !hasMicrophonePermission ->
+                                            "Concede permisos de micrófono para continuar"
+                                    isServiceRunning ->
+                                            "Escuchando palabra clave: \"$currentKeyword\""
+                                    isKeywordConfigured ->
+                                            "Palabra configurada: \"$currentKeyword\""
+                                    else -> "Configura una palabra clave primero"
+                                },
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -90,7 +137,7 @@ fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel?
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = isKeywordConfigured,
+                enabled = hasMicrophonePermission && isKeywordConfigured,
                 colors =
                         ButtonDefaults.buttonColors(
                                 containerColor =
@@ -100,9 +147,12 @@ fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel?
         ) {
             Text(
                     text =
-                            if (isServiceRunning) "⏸️ Detener Protección"
-                            else if (isKeywordConfigured) "▶️ Iniciar Protección"
-                            else "⚙️ Configura palabra clave primero"
+                            when {
+                                !hasMicrophonePermission -> "🔒 Concede permisos primero"
+                                isServiceRunning -> "⏸️ Detener Protección"
+                                isKeywordConfigured -> "▶️ Iniciar Protección"
+                                else -> "⚙️ Configura palabra clave primero"
+                            }
             )
         }
 
@@ -118,15 +168,17 @@ fun HomeScreen(navController: NavController? = null, appViewModel: AppViewModel?
                     modifier = Modifier.weight(1f)
             ) { Text("⚙️ Configurar") }
 
-            OutlinedButton(onClick = { /* Test functionality */}, modifier = Modifier.weight(1f)) {
-                Text("📤 Probar")
-            }
+            OutlinedButton(
+                    onClick = { /* Test functionality */},
+                    modifier = Modifier.weight(1f),
+                    enabled = hasMicrophonePermission
+            ) { Text("📤 Probar") }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         // Info Card
-        if (isServiceRunning) {
+        if (isServiceRunning && hasMicrophonePermission) {
             Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors =
