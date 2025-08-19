@@ -20,7 +20,9 @@ fun HomeScreen(
         navController: NavController? = null,
         appViewModel: AppViewModel? = null,
         hasMicrophonePermission: Boolean = false,
-        onRequestMicrophonePermission: () -> Unit = {}
+        hasLocationPermission: Boolean = false,
+        onRequestMicrophonePermission: () -> Unit = {},
+        onRequestLocationPermission: () -> Unit = {}
 ) {
     // Estados del ViewModel
     val keywordState = appViewModel?.keywordState
@@ -38,12 +40,6 @@ fun HomeScreen(
     val partialText = voiceRecognitionState?.partialText ?: ""
     val recognitionCount = voiceRecognitionState?.recognitionCount ?: 0
     val serviceStatus = voiceRecognitionState?.serviceStatus ?: "Inactivo"
-
-    // Estados de configuración
-    val isWhatsAppConfigured = configState?.isWhatsAppConfigured ?: false
-    val isTelegramConfigured = configState?.isTelegramConfigured ?: false
-    val hasEmergencyContacts = configState?.hasEmergencyContacts ?: false
-    val emergencyContactsCount = configState?.emergencyContactsCount ?: 0
 
     // Estado para el scroll
     val listState = rememberLazyListState()
@@ -227,6 +223,17 @@ fun HomeScreen(
                                                 )
                                 )
                             }
+                            if (hasLocationPermission) {
+                                Text(
+                                        text = "📍 GPS habilitado para alertas",
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        color =
+                                                MaterialTheme.colorScheme.onTertiaryContainer.copy(
+                                                        alpha = 0.7f
+                                                )
+                                )
+                            }
                         }
                     }
                 }
@@ -246,7 +253,6 @@ fun HomeScreen(
                     OutlinedButton(
                             onClick = {
                                 // Test functionality - solo para probar reconocimiento
-                                // Por ahora solo un placeholder
                             },
                             modifier = Modifier.weight(1f),
                             enabled = hasMicrophonePermission
@@ -254,7 +260,7 @@ fun HomeScreen(
                 }
             }
 
-            // Botón principal (con más información de debug)
+            // Botón principal
             item {
                 Column {
                     Button(
@@ -290,12 +296,12 @@ fun HomeScreen(
                         )
                     }
 
-                    // Debug info (más detallado)
-                    if (isKeywordConfigured && hasMicrophonePermission) {
+                    // Debug info
+                    if (isKeywordConfigured) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                                 text =
-                                        "Debug: Keyword='$currentKeyword', Running=$isServiceRunning, Listening=$isListening\nStatus='$serviceStatus', Count=$recognitionCount",
+                                        "Debug: Keyword='$currentKeyword', Mic=$hasMicrophonePermission, GPS=$hasLocationPermission\nRunning=$isServiceRunning, Listening=$isListening, Status='$serviceStatus'",
                                 fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                                 textAlign = TextAlign.Center,
@@ -333,9 +339,12 @@ fun HomeScreen(
                             Text(
                                     text =
                                             when {
-                                                !hasMicrophonePermission -> "🔇 Sin Permisos"
-                                                isServiceRunning -> "🔊 Protección Activa"
-                                                isKeywordConfigured -> "⚪ Protección Inactiva"
+                                                !hasMicrophonePermission ->
+                                                        "🔇 Sin Permisos de Micrófono"
+                                                !hasLocationPermission ->
+                                                        "📍 Sin Permisos de Ubicación"
+                                                isServiceRunning -> "🔊 Reconocimiento Activo"
+                                                isKeywordConfigured -> "⚪ Listo para Iniciar"
                                                 else -> "⚠️ Sin Configurar"
                                             },
                                     fontWeight = FontWeight.Medium,
@@ -347,6 +356,12 @@ fun HomeScreen(
                                 if (isKeywordConfigured) {
                                     Text("🗣️", fontSize = 12.sp)
                                 }
+                                if (hasMicrophonePermission) {
+                                    Text("🎤", fontSize = 12.sp)
+                                }
+                                if (hasLocationPermission) {
+                                    Text("📍", fontSize = 12.sp)
+                                }
                             }
                         }
 
@@ -357,6 +372,8 @@ fun HomeScreen(
                                         when {
                                             !hasMicrophonePermission ->
                                                     "Concede permisos de micrófono para continuar"
+                                            !hasLocationPermission ->
+                                                    "Concede permisos de ubicación para enviar alertas completas"
                                             !isKeywordConfigured ->
                                                     "Configura una palabra clave en Configuración"
                                             isServiceRunning ->
@@ -371,7 +388,10 @@ fun HomeScreen(
                         if (isKeywordConfigured && isServiceRunning) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                    text = "✅ Reconocimiento de voz activo",
+                                    text =
+                                            if (hasLocationPermission)
+                                                    "✅ Sistema completo: Voz + GPS + Telegram"
+                                            else "⚠️ Solo reconocimiento de voz (sin GPS)",
                                     fontSize = 12.sp,
                                     color =
                                             MaterialTheme.colorScheme.onSurfaceVariant.copy(
@@ -383,7 +403,7 @@ fun HomeScreen(
                 }
             }
 
-            // Permission Warning Card (si no tiene permiso)
+            // Permission Warning Card - Micrófono (si no tiene permiso)
             if (!hasMicrophonePermission) {
                 item {
                     Card(
@@ -397,7 +417,7 @@ fun HomeScreen(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                        text = "⚠️ Permiso Requerido",
+                                        text = "🎤 Permiso de Micrófono Requerido",
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onErrorContainer,
                                         fontSize = 16.sp
@@ -417,7 +437,58 @@ fun HomeScreen(
                                             ButtonDefaults.buttonColors(
                                                     containerColor = MaterialTheme.colorScheme.error
                                             )
-                            ) { Text("🎤 Conceder Permiso") }
+                            ) { Text("🎤 Conceder Permiso de Micrófono") }
+                        }
+                    }
+                }
+            }
+
+            // Permission Warning Card - Ubicación (si no tiene permiso)
+            if (!hasLocationPermission) {
+                item {
+                    Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors =
+                                    CardDefaults.cardColors(
+                                            containerColor =
+                                                    MaterialTheme.colorScheme.secondaryContainer
+                                    )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                        text = "📍 Permiso de Ubicación Recomendado",
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        fontSize = 16.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                    text =
+                                            "Para enviar tu ubicación exacta por Telegram en caso de emergencia, necesitamos acceso a tu GPS.",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                        onClick = onRequestLocationPermission,
+                                        modifier = Modifier.weight(1f),
+                                        colors =
+                                                ButtonDefaults.buttonColors(
+                                                        containerColor =
+                                                                MaterialTheme.colorScheme.tertiary
+                                                )
+                                ) { Text("📍 Conceder Ubicación") }
+                                OutlinedButton(
+                                        onClick = { /* Continuar sin ubicación */},
+                                        modifier = Modifier.weight(1f)
+                                ) { Text("Continuar sin GPS") }
+                            }
                         }
                     }
                 }
@@ -467,7 +538,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                                text = "🛡️ ViolenceApp",
+                                text = "🎤 Reconocimiento de Voz",
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary

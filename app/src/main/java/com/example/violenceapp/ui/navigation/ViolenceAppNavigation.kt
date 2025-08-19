@@ -35,7 +35,9 @@ sealed class Screen(val route: String, val title: String, val emoji: String) {
 fun ViolenceAppNavigation(
         viewModel: AppViewModel,
         hasMicrophonePermission: Boolean = false,
-        onRequestMicrophonePermission: () -> Unit = {}
+        hasLocationPermission: Boolean = false,
+        onRequestMicrophonePermission: () -> Unit = {},
+        onRequestLocationPermission: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -58,7 +60,9 @@ fun ViolenceAppNavigation(
                         navController = navController,
                         appViewModel = viewModel,
                         hasMicrophonePermission = hasMicrophonePermission,
-                        onRequestMicrophonePermission = onRequestMicrophonePermission
+                        hasLocationPermission = hasLocationPermission,
+                        onRequestMicrophonePermission = onRequestMicrophonePermission,
+                        onRequestLocationPermission = onRequestLocationPermission
                 )
             }
             composable(Screen.Setup.route) {

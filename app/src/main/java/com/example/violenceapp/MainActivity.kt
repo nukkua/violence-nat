@@ -29,11 +29,15 @@ class MainActivity : FragmentActivity() {
     private lateinit var biometricAuthManager: BiometricAuthManager
     private lateinit var sharedPreferencesManager: SharedPreferencesManager
 
-    // Estados para permisos
+    // Estados para permisos (agregado ubicación)
     var hasMicrophonePermission by mutableStateOf(false)
         private set
+    var hasLocationPermission by mutableStateOf(false)
+        private set
 
-    private val PERMISSION_REQUEST_CODE = 1001
+    // Códigos de solicitud para diferentes tipos de permisos
+    private val MICROPHONE_PERMISSION_REQUEST_CODE = 1001
+    private val LOCATION_PERMISSION_REQUEST_CODE = 1002
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,7 +73,9 @@ class MainActivity : FragmentActivity() {
             ViolenceAppNavigation(
                     viewModel = appViewModel,
                     hasMicrophonePermission = hasMicrophonePermission,
-                    onRequestMicrophonePermission = ::requestMicrophonePermissionFromCompose
+                    hasLocationPermission = hasLocationPermission,
+                    onRequestMicrophonePermission = ::requestMicrophonePermissionFromCompose,
+                    onRequestLocationPermission = ::requestLocationPermissionFromCompose
             )
         } else {
             // Mostrar pantalla de autenticación
@@ -88,9 +94,13 @@ class MainActivity : FragmentActivity() {
         hasMicrophonePermission =
                 ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
                         PackageManager.PERMISSION_GRANTED
+
+        hasLocationPermission =
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                        PackageManager.PERMISSION_GRANTED
     }
 
-    // Función específica para llamadas desde Compose
+    // Función específica para pedir permisos de micrófono
     private fun requestMicrophonePermissionFromCompose() {
         try {
             val permissions = mutableListOf<String>()
@@ -122,19 +132,80 @@ class MainActivity : FragmentActivity() {
                 ActivityCompat.requestPermissions(
                         this,
                         permissions.toTypedArray(),
-                        PERMISSION_REQUEST_CODE
+                        MICROPHONE_PERMISSION_REQUEST_CODE
                 )
             } else {
                 hasMicrophonePermission = hasMicrophone
-                Toast.makeText(this, "Los permisos ya están concedidos", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                                this,
+                                "El permiso de micrófono ya está concedido",
+                                Toast.LENGTH_SHORT
+                        )
+                        .show()
             }
         } catch (e: Exception) {
-            Toast.makeText(this, "Error al solicitar permisos: ${e.message}", Toast.LENGTH_LONG)
+            Toast.makeText(
+                            this,
+                            "Error al solicitar permiso de micrófono: ${e.message}",
+                            Toast.LENGTH_LONG
+                    )
                     .show()
         }
     }
 
-    // Manejar resultado de permisos con el método tradicional
+    // Nueva función para pedir permisos de ubicación
+    private fun requestLocationPermissionFromCompose() {
+        try {
+            val permissions = mutableListOf<String>()
+
+            // Verificar permisos actuales de ubicación
+            val hasFineLocation =
+                    ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+
+            val hasCoarseLocation =
+                    ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+
+            // Solo agregar permisos que necesitamos
+            if (!hasFineLocation) {
+                permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (!hasCoarseLocation) {
+                permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+
+            // Pedir permisos de ubicación
+            if (permissions.isNotEmpty()) {
+                ActivityCompat.requestPermissions(
+                        this,
+                        permissions.toTypedArray(),
+                        LOCATION_PERMISSION_REQUEST_CODE
+                )
+            } else {
+                hasLocationPermission = hasFineLocation
+                Toast.makeText(
+                                this,
+                                "Los permisos de ubicación ya están concedidos",
+                                Toast.LENGTH_SHORT
+                        )
+                        .show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(
+                            this,
+                            "Error al solicitar permisos de ubicación: ${e.message}",
+                            Toast.LENGTH_LONG
+                    )
+                    .show()
+        }
+    }
+
+    // Manejar resultado de permisos con el método tradicional (actualizado)
     override fun onRequestPermissionsResult(
             requestCode: Int,
             permissions: Array<out String>,
@@ -142,27 +213,54 @@ class MainActivity : FragmentActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            var microphoneGranted = false
+        when (requestCode) {
+            MICROPHONE_PERMISSION_REQUEST_CODE -> {
+                var microphoneGranted = false
 
-            // Revisar resultados
-            for (i in permissions.indices) {
-                if (permissions[i] == Manifest.permission.RECORD_AUDIO) {
-                    microphoneGranted = grantResults[i] == PackageManager.PERMISSION_GRANTED
+                // Revisar resultados de micrófono
+                for (i in permissions.indices) {
+                    if (permissions[i] == Manifest.permission.RECORD_AUDIO) {
+                        microphoneGranted = grantResults[i] == PackageManager.PERMISSION_GRANTED
+                    }
+                }
+
+                hasMicrophonePermission = microphoneGranted
+
+                if (microphoneGranted) {
+                    Toast.makeText(this, "🎤 Permiso de micrófono concedido", Toast.LENGTH_SHORT)
+                            .show()
+                } else {
+                    Toast.makeText(
+                                    this,
+                                    "🎤 Permiso de micrófono necesario para el reconocimiento de voz",
+                                    Toast.LENGTH_LONG
+                            )
+                            .show()
                 }
             }
+            LOCATION_PERMISSION_REQUEST_CODE -> {
+                var locationGranted = false
 
-            hasMicrophonePermission = microphoneGranted
+                // Revisar resultados de ubicación
+                for (i in permissions.indices) {
+                    if (permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION) {
+                        locationGranted = grantResults[i] == PackageManager.PERMISSION_GRANTED
+                    }
+                }
 
-            if (microphoneGranted) {
-                Toast.makeText(this, "Permiso de micrófono concedido", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(
-                                this,
-                                "Permiso de micrófono necesario para el funcionamiento",
-                                Toast.LENGTH_LONG
-                        )
-                        .show()
+                hasLocationPermission = locationGranted
+
+                if (locationGranted) {
+                    Toast.makeText(this, "📍 Permisos de ubicación concedidos", Toast.LENGTH_SHORT)
+                            .show()
+                } else {
+                    Toast.makeText(
+                                    this,
+                                    "📍 Permisos de ubicación recomendados para enviar ubicación por Telegram",
+                                    Toast.LENGTH_LONG
+                            )
+                            .show()
+                }
             }
         }
     }
